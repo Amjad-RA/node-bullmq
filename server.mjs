@@ -1,32 +1,36 @@
 import { Queue, Worker } from 'bullmq';
 import express from 'express';
-import IORedis from 'ioredis';
+import { redisConnection } from './config.mjs';
+import bodyParser from 'body-parser';
 const app = express()
 
-const connection = new IORedis({
-  maxRetriesPerRequest: null,
-});
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(bodyParser.json());
 
 // Create a new connection in every instance
-const myQueue = new Queue('myqueue', { connection });
-new Worker('myqueue', async (job)=>{
-  console.log(job.data);
-}, { connection });
+const jobQueue = new Queue('jobQueue', { redisConnection });
 
 const hostname = '127.0.0.1';
 const port = 3000;
 
-async function addJobs() {
-  await myQueue.add('myJobName', { foo: 'bar' });
-  await myQueue.add('myJobName', { qux: 'baz' });
-}
+app.post('/add-job', async (req, res) => {
+  console.log(req.body);
+  const job = await jobQueue.add('job', req.body);
+  res.status(201).json({ jobId: job.id });
+});
 
-await addJobs();
+const worker = new Worker('jobQueue', async (job)=>{
+  console.log(job.data);
+  // Do something with the job data
+}, { connection });
 
-app.get('/:data', (req, res) => {
-  myQueue.add('myJobName', { foo: req.params });
-  res.status(200).send(req.params)
-})
+worker.on('completed', (job) => {
+  console.log(`Job ${job.id} completed successfully`);
+});
+
+worker.on('failed', (job, err) => {
+  console.error(`Job ${job.id} failed with error ${err.message}`);
+});
 
 app.listen(port, hostname, () => {
   console.log(`Server running at http://${hostname}:${port}/`);
